@@ -120,7 +120,7 @@ function getEntryList(req, query, urlPath) {
 
 
 // Modifies the entry in the Datastore and return error results
-function editEntry(updatedEntity, objectName) {
+function editEntry(updatedEntity) {
   var result = {
     'status': null,
     'error': null
@@ -130,7 +130,7 @@ function editEntry(updatedEntity, objectName) {
     datastore.update(updatedEntity, (err, apiResponse) => {
       if (err) {
         result.status = 404;
-        result.error = "No " + objectName + " with this " + objectName + "_id exists";
+        result.error = "No entity with this id exists";
       } else {
         result.status = 200;
       }
@@ -460,6 +460,7 @@ app.post('/engineering_changes', async (req, res) => {
     return;
   }
 
+  // Set default values if not provided
   defaultAttributeSetEC(req)
 
   // Prepares the new entity
@@ -483,12 +484,13 @@ app.post('/engineering_changes', async (req, res) => {
 // Get a Engineering Change
 app.get('/engineering_changes/:ec_id', async (req, res) => {
 
+  // Get entity key
+  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
+
   // Validate content request
   if (!validJSONAccept(req, res)) {
     return;
   }
-
-  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
   
   // Check if credentials exist
   var ticket = await credentialsExist(req, res)
@@ -561,93 +563,68 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
 // });
 
 
-// // Update a Boat
-// app.put('/boats/:boat_id', async (req, res) => {
+// Update a Engineering Change
+app.put('/engineering_changes/:ec_id', async (req, res) => {
 
-//   // Validate content type
-//   if (req.get('Content-Type') != 'application/json') {
-//     res.status(415).json({
-//       "Error": "The request uses a unsupported media type"
-//     });
-//     return;
-//   }
-  
-//   // Validate content request
-//   if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json') {
-//     res.status(406).json({
-//       "Error": "The request asks for an unsupported media type"
-//     });
-//     return;
-//   }
+  // Get entity key
+  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
 
-//   // Validate input
-//   containsValidName = false;
-//   containsValidType = false;
-//   containsValidLength = false;
-//   containsNonvalid = false;
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
 
-//   for (prop in req.body) {
-//     if (prop == 'name') {
-//       containsValidName = true;
-//     } else if (prop == 'type') {
-//       containsValidType = true;
-//     } else if (prop == 'length' && typeof req.body[prop] == 'number') {
-//       containsValidLength = true;
-//     } else {
-//       containsNonvalid = true;
-//     }
-//   }
+  // Check if credentials exist
+  var ticket = await credentialsExist(req, res)
+  if (ticket == null) {
+    return;
+  }
 
-//   // Return error if bad input
-//   if (!(containsValidName &&
-//         containsValidType &&
-//         containsValidLength)
-//       ||
-//       containsNonvalid) {
-//     res.status(400).json({
-//       "Error": "The request object is missing at least one of the required attributes, contains not allowed information, or the attribute has the wrong value type"
-//     });
-//     return;
-//   }
+  //Determine if this is being accessed by the owner
+  var validOwner = await credentialsExist(req, res, ticket, ecKey)
+  if (!validOwner){
+    return;
+  }
 
-//   // Check for duplicates
-//   var duplicateResponse = await checkDuplicate(req, 'Boat', 'name', req.body.name);
+  // Validate input for data type and for valid attributes
+  if (!attributeCheckEC(req, res)) {
+    return;
+  }
 
-//   if (duplicateResponse.error != null) {
-//     res.status(400).json({
-//       "Error": "Falied to determine if the name was a duplicate"
-//     });
-//     return;
-//   } else if (duplicateResponse.duplicate == true) {
-//     res.status(403).json({
-//       "Error": "The request uses a already existing name"
-//     });
-//     return;
-//   }
+  // Validate for all required
+  if (!requiredAttributeCheckEC(req, res)) {
+    return;
+  }
 
-//   // Prepare the updated entity
-//   const boat = {
-//     key: datastore.key(['Boat', Number(req.params.boat_id)]),
-//     data: {
-//       name: req.body.name,
-//       type: req.body.type,
-//       length: req.body.length,
-//     },
-//   }
+  // Set default values if not provided
+  defaultAttributeSetEC(req)
 
-//   const editResponse = await editEntry(boat, "boat");
+  // Prepare the updated entity
+  const ecEntity = {
+    key: ecKey,
+    data: {
+      type: req.body.type,
+      date_created: req.body.date_created,
+      history: req.body.history,
+      plan: req.body.plan,
+      parts_changed: [],  //TODO Should it clear relationship?
+      owner: ticket.getPayload().sub
+    },
+  };
 
-//   // Respond with entities list or error message
-//   if (editResponse.error == null) {
-//     // Populate return entity
-//     entity = boat.data
-//     entity.id = req.params.boat_id;
-//     entity.self = req.protocol + "://" + req.get("host") + "/boats/" + req.params.boat_id;
-//     res.status(303).set("Location", entity.self).json(entity);
-//   } else {
-//     res.status(editResponse.status).json({'Error': editResponse.error});
-//   }
-// });
+  const editResponse = await editEntry(ecEntity);
+
+  // Respond with entities list or error message
+  if (editResponse.error == null) {
+    // Populate return entity
+    entity = ecEntity.data
+    entity.id = req.params.ec_id;
+    entity.self = req.protocol + "://" + req.get("host") + "/engineering_changes/" + req.params.ec_id;
+    res.status(303).set("Location", entity.self).json(entity);
+  } else {
+    res.status(editResponse.status).json({'Error': editResponse.error});
+  }
+});
 
 
 // // Edit a Boat
@@ -749,7 +726,7 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
 //     },
 //   }
 
-//   const editResponse = await editEntry(boat, "boat");
+//   const editResponse = await editEntry(boat);
 
 //   // Respond with entities list or error message
 //   if (editResponse.error == null) {
@@ -766,6 +743,8 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
 
 // Delete a Engineering Change
 app.delete('/engineering_changes/:ec_id', async (req, res) => {
+
+  // Get entity key
   const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
   
   // Check if credentials exist
