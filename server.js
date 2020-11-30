@@ -480,46 +480,43 @@ app.post('/engineering_changes', async (req, res) => {
 });
 
 
-// // Get a Boat
-// app.get('/boats/:boat_id', async (req, res) => {
+// Get a Engineering Change
+app.get('/engineering_changes/:ec_id', async (req, res) => {
 
-//   // Validate content request
-//   if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json' && req.get('Accept') != 'text/html') {
-//     res.status(406).json({
-//       "Error": "The request asks for an unsupported media type"
-//     });
-//     return;
-//   }
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
 
-//   // Generate Key
-//   const key = datastore.key(['Boat', Number(req.params.boat_id)]);
+  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
+  
+  // Check if credentials exist
+  var ticket = await credentialsExist(req, res)
+  if (ticket == null) {
+    return;
+  }
 
-//   var response = {
-//     status: null,
-//     content: {}
-//   };
+  //Determine if this is being accessed by the owner
+  var validOwner = await credentialsExist(req, res, ticket, ecKey)
+  if (!validOwner){
+    return;
+  }
 
-//   // Get entry from Datastore
-//   const entryData = await getEntry(req, key, "/boats/");
+  var response = {
+    status: null,
+    content: {}
+  };
 
-//   // Respond with entity data or error message
-//   if (entryData.error != null) {
-//     res.status(entryData.status).json({'Error': entryData.error});
-//   } else {
-//     if (req.get('Accept') == '*/*' || req.get('Accept') == 'application/json') {
-//       res.status(entryData.status).json(entryData.entity);
-//     } else {
-//       // Construct HTML response
-//       htmlRes = '<ul>';
-//       for (attr in entryData.entity) {
-//         htmlRes = htmlRes + '<li>' + attr + ': ' + entryData.entity[attr] + '</li>';
-//       }
-//       htmlRes = htmlRes + '</ul>';
+  // Get entry from Datastore
+  const entryData = await getEntry(req, ecKey, "/engineering_changes/");
 
-//       res.status(entryData.status).send(htmlRes);
-//     }
-//   }
-// });
+  // Respond with entity data or error message
+  if (entryData.error != null) {
+    res.status(entryData.status).json({'Error': entryData.error});
+  } else {
+    res.status(entryData.status).json(entryData.entity);
+  }
+});
 
 
 // // Get all of the users public boats
