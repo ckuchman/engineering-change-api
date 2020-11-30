@@ -347,7 +347,7 @@ function defaultAttributeSetEC(req) {
   for (prop in req.body) {
     if (prop == 'type') {
       containsType = true;
-    } else if (prop == 'date') {
+    } else if (prop == 'date_created') {
       containsDate = true;
     }
   }
@@ -367,7 +367,7 @@ function defaultAttributeSetEC(req) {
 
 
 // Check if the credentials allow access to record
-async function validOwner(req, res, ticket, key) {
+async function validOwnerEC(req, res, ticket, key) {
 
   // Get engineering change to check owner
   const getResponse = await getEntry(req, key, "/engineering_changes/");
@@ -454,15 +454,10 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   //Determine if this is being accessed by the owner
-  var owner = await validOwner(req, res, ticket, key)
+  var owner = await validOwnerEC(req, res, ticket, key)
   if (!owner){
     return;
   }
-
-  var response = {
-    status: null,
-    content: {}
-  };
 
   // Get entry from Datastore
   const entryData = await getEntry(req, key, "/engineering_changes/");
@@ -543,7 +538,7 @@ app.put('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   //Determine if this is being accessed by the owner
-  var owner = await validOwner(req, res, ticket, key)
+  var owner = await validOwnerEC(req, res, ticket, key)
   if (!owner){
     return;
   }
@@ -607,7 +602,7 @@ app.patch('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   //Determine if this is being accessed by the owner
-  var owner = await validOwner(req, res, ticket, key)
+  var owner = await validOwnerEC(req, res, ticket, key)
   if (!owner){
     return;
   }
@@ -634,7 +629,7 @@ app.patch('/engineering_changes/:ec_id', async (req, res) => {
   const oldData = await getEntry(req, key, "/engineering_changes/");
 
   //Determine old or new value
-  var type, date_created, history, plan;
+  var type, dateCreated, history, plan;
 
   if (req.body.type != undefined) {
     type = req.body.type;
@@ -643,9 +638,9 @@ app.patch('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   if (req.body.date_created != undefined) {
-    date_created = req.body.date_created;
+    dateCreated = req.body.date_created;
   } else {
-    date_created = oldData.entity.date_created;
+    dateCreated = oldData.entity.date_created;
   }
 
   if (req.body.history != undefined) {
@@ -665,7 +660,7 @@ app.patch('/engineering_changes/:ec_id', async (req, res) => {
     key: key,
     data: {
       type: type,
-      date_created: date_created,
+      date_created: dateCreated,
       history: history,
       plan: plan,
       parts_changed: oldData.entity.parts_changed,
@@ -705,6 +700,377 @@ app.delete('/engineering_changes/:ec_id', async (req, res) => {
   if (!owner){
     return;
   }
+
+  const deleteResponse = await deleteEntry(key);
+
+  // Respond with entities list or error message
+  if (deleteResponse.error == null) {
+    res.status(deleteResponse.status).send();
+  } else {
+    res.status(deleteResponse.status).json({'Error': deleteResponse.error});
+  }
+});
+
+
+/////////////////// Part Change Helper Functions ///////////////////
+
+// Attribute valid check for PR. Determines that only valid attributes are used with
+// valid data types.
+function attributeCheckPR(req, res) {
+  var validReq = true;
+
+  // Check for duplicate inputs
+  var fileCount = 0;
+  var dateCount = 0;
+  var revisionCount = 0;
+  var changeCount = 0;
+  
+  for (prop in req.body) {
+    switch(prop) {
+      case 'file_name':
+        if ((typeof req.body[prop] != 'string') || fileCount > 0) {
+          validReq = false;
+        }
+        fileCount++;
+        break;
+      case 'date_created':
+        if ((typeof req.body[prop] != 'string') || dateCount > 0) {
+          validReq = false;
+        }
+        dateCount++;
+        break;
+      case 'revision':
+        if ((typeof req.body[prop] != 'string') || revisionCount > 0) {
+          validReq = false;
+        }
+        revisionCount++;
+        break;
+      case 'change':
+        if ((typeof req.body[prop] != 'string') || changeCount > 0) {
+          validReq = false;
+        }
+        changeCount++;
+        break;
+      default:
+        validReq = false;
+    }
+  }
+
+  if (validReq) {
+    return true;
+  } else {
+    //Send response status and error message
+    res.status(400).json({
+      "Error": "The request object is missing required attributes, contains not allowed information, or the attribute has the wrong value type"
+    });
+    return false;
+  }
+}
+
+// Required attribute check for PR.
+function requiredAttributeCheckPR(req, res) {
+  var containsFileName = false;
+  var containsRevision = false;
+  var containsChange = false;
+
+  for (prop in req.body) {
+    if (prop == 'file_name') {
+      containsFileName = true;
+    } else if (prop == 'revision') {
+      containsRevision = true;
+    } else if (prop == 'change') {
+      containsChange = true;
+    }
+  }
+  
+  if (containsFileName && containsRevision && containsChange) {
+    return true;
+  } else {
+    //Send response status and error message
+    res.status(400).json({
+      "Error": "The request object is missing required attributes, contains not allowed information, or the attribute has the wrong value type"
+    });
+    return false;
+  }
+}
+
+// Default Attribute set for PR.
+function defaultAttributeSetPR(req) {
+
+  // Check for the optional attributes
+  var containsDate = false;
+
+  for (prop in req.body) {
+    if (prop == 'date_changed') {
+      containsDate = true;
+    }
+  }
+  
+  if (!containsDate) {
+    // Source: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date
+    var [month, date, year] = new Date().toLocaleDateString("en-US").split("/")
+    req.body.date_created = month + "/" + date + "/" + year
+
+  }
+}
+
+/////////////////// Part Change Routing ///////////////////
+
+// Create a Part Change
+app.post('/part_changes', async (req, res) => {
+  
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
+
+  // Validate input for data type and for valid attributes
+  if (!attributeCheckPR(req, res)) {
+    return;
+  }
+
+  // Validate for all required
+  if (!requiredAttributeCheckPR(req, res)) {
+    return;
+  }
+
+  // Set default values if not provided
+  defaultAttributeSetPR(req)
+
+  // Prepares the new entity
+  const partChangeEntity = {
+    key: datastore.key('Part-Change'),
+    data: {
+      file_name: req.body.file_name,
+      date_created: req.body.date_created,
+      revision: req.body.revision,
+      change: req.body.change,
+      engineering_change_id: null
+    },
+  };
+
+  // Create entry and respond with values
+  createEntry(req, res, partChangeEntity, "part change", "/part_changes/");
+});
+
+
+// Get a Part Change
+app.get('/part_changes/:pr_id', async (req, res) => {
+
+  // Get entity key
+  const key = datastore.key(['Part-Change', Number(req.params.pr_id)]);
+
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
+
+  // Get entry from Datastore
+  const entryData = await getEntry(req, key, "/part_changes/");
+
+  // Respond with entity data or error message
+  if (entryData.error != null) {
+    res.status(entryData.status).json({'Error': entryData.error});
+  } else {
+    res.status(entryData.status).json(entryData.entity);
+  }
+});
+
+
+// Get all Allowed Part Changes
+app.get('/part_changes', async (req, res) => {
+
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
+
+  // Generate the query for all part changes
+  query = datastore.createQuery("Part-Change").limit(5);
+
+  if (req.query.cursor) {
+    query.start(req.query.cursor);
+  }
+
+  const entryList = await getEntryList(req, query, "/part_changes/");
+
+  // Determine total count
+  query = datastore.createQuery("Part-Change");
+
+  const entryListCount = await getEntryList(req, query, "/part_changes/");
+
+
+  // Respond with entities list or error message
+  if (entryList.error == null) {
+    if (entryList.cursor != null) {
+      res.status(entryList.status).json({
+        'count': entryListCount.entities.length,
+        'entities': entryList.entities,
+        'next': entryList.cursor
+      });
+    } else {
+      res.status(entryList.status).json({
+        'count': entryListCount.entities.length,
+        'entities': entryList.entities
+      });
+    }
+  } else {
+    res.status(entryList.status).json({'Error': entryList.error});
+  }
+});
+
+
+// Update a Part Change
+app.put('/part_changes/:pr_id', async (req, res) => {
+
+  // Get entity key
+  const key = datastore.key(['Part-Change', Number(req.params.pr_id)]);
+
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
+
+  // Validate input for data type and for valid attributes
+  if (!attributeCheckPR(req, res)) {
+    return;
+  }
+
+  // Validate for all required
+  if (!requiredAttributeCheckPR(req, res)) {
+    return;
+  }
+
+  // Set default values if not provided
+  defaultAttributeSetPR(req)
+
+  // Prepare the updated entity
+  const partChangeEntity = {
+    key: key,
+    data: {
+      file_name: req.body.file_name,
+      date_created: req.body.date_created,
+      revision: req.body.revision,
+      change: req.body.change,
+      engineering_change_id: null, //TODO should this clear?
+      owner: ticket.getPayload().sub
+    },
+  };
+
+  const editResponse = await editEntry(partChangeEntity);
+
+  // Respond with entities list or error message
+  if (editResponse.error == null) {
+    // Populate return entity
+    entity = partChangeEntity.data
+    entity.id = req.params.pr_id;
+    entity.self = req.protocol + "://" + req.get("host") + "/part_changes/" + req.params.pr_id;
+    res.status(303).set("Location", entity.self).json(entity);
+  } else {
+    res.status(editResponse.status).json({'Error': editResponse.error});
+  }
+});
+
+
+// Edit a Part Change
+app.patch('/part_changes/:pr_id', async (req, res) => {
+
+  // Get entity key
+  const key = datastore.key(['Part-Change', Number(req.params.pr_id)]);
+
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
+
+  // Validate input for data type and for valid attributes
+  if (!attributeCheckPR(req, res)) {
+    return;
+  }
+
+  // Validate that atleast one attribute is being provided
+  var propCounter = 0
+  for (prop in req.body) {
+    propCounter++;
+  }
+
+  if (propCounter == 0) {
+    res.status(400).json({
+      "Error": "The request object is missing required attributes, contains not allowed information, or the attribute has the wrong value type"
+    });
+    return;
+  }
+
+  // Get old from Datastore
+  const oldData = await getEntry(req, key, "/part_changes/");
+
+  // Return error if not an existing id
+  if (oldData.error != null) {
+    res.status(404).json({
+      "Error": "No entity with this id exists"
+    });
+    return;
+  }
+
+  //Determine old or new value
+  var fileName, dateCreated, revision, change;
+
+  if (req.body.file_name != undefined) {
+    fileName = req.body.file_name;
+  } else {
+    fileName = oldData.entity.file_name;
+  }
+
+  if (req.body.date_created != undefined) {
+    dateCreated = req.body.date_created;
+  } else {
+    dateCreated = oldData.entity.date_created;
+  }
+
+  if (req.body.revision != undefined) {
+    revision = req.body.revision;
+  } else {
+    revision = oldData.entity.revision;
+  }
+
+  if (req.body.change != undefined) {
+    change = req.body.change;
+  } else {
+    change = oldData.entity.change;
+  }
+
+  // Prepare the updated entity
+  const partChangeEntity = {
+    key: key,
+    data: {
+      file_name: fileName,
+      date_created: dateCreated,
+      revision: revision,
+      change: change,
+      engineering_change_id: oldData.entity.engineering_change_id
+    },
+  };
+
+  const editResponse = await editEntry(partChangeEntity);
+
+  // Respond with entities list or error message
+  if (editResponse.error == null) {
+    // Populate return entity
+    entity = partChangeEntity.data
+    entity.id = req.params.pr_id;
+    entity.self = req.protocol + "://" + req.get("host") + "/part_changes/" + req.params.pr_id;
+    res.status(editResponse.status).json(entity);
+  } else {
+    res.status(editResponse.status).json({'Error': editResponse.error});
+  }
+});
+
+
+// Delete a Part Change
+app.delete('/part_changes/:pr_id', async (req, res) => {
+
+  // Get entity key
+  const key = datastore.key(['Part-Change', Number(req.params.pr_id)]);
 
   const deleteResponse = await deleteEntry(key);
 
