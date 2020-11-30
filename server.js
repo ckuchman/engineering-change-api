@@ -56,7 +56,7 @@ function insertEntry(newEntry, objectName) {
 
 
 // Get the entry from the Datastore and return entity or error results
-function getEntry(req, key, objectName, urlPath) {
+function getEntry(req, key, urlPath) {
   var result = {
     'status': null,
     'error': null,
@@ -68,7 +68,7 @@ function getEntry(req, key, objectName, urlPath) {
     datastore.get(key, (err, entity) => {
       if (err || entity == undefined) {
         result.status = 404;
-        result.error = "No " + objectName + " with this " + objectName + "_id exists";
+        result.error = "No entity with this id exists";
       } else {
         result.status = 200;
         entity.id = entity[datastore.KEY].id;
@@ -174,7 +174,7 @@ async function createEntry(req, res, newEntry, objectName, urlPath) {
   var result = await insertEntry(newEntry, objectName);
 
   if (result.error == null) { 
-    const entryData = await getEntry(req, result.key, objectName, urlPath);
+    const entryData = await getEntry(req, result.key, urlPath);
 
     if (entryData.error == null) {
       response.status = result.status;
@@ -239,7 +239,39 @@ async function checkDuplicate(req, kind, attr, value) {
   return response;
 }
 
-/////////////////// Routing ///////////////////
+// Validate content request for JSON
+function validJSONAccept(req, res) {
+  if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json' && req.get('Accept') != 'text/html') {
+    //Send response status and error message
+    res.status(406).json({
+      "Error": "The request asks for an unsupported media type"
+    });
+    return false
+  }
+  return true;
+}
+
+// Validates if the credentials exist
+async function credentialsExist(req, res) {
+  ticket = null;
+
+  try {
+    // Check the JWT value
+    ticket = await oauth2Client.verifyIdToken({
+      idToken: req.headers.authorization.substring(7),
+      audience: CLIENT_ID
+    });
+  } catch (error) {
+    //Send response status and error message
+    res.status(403).json({
+      "Error": "Credentials do not allow for access to this entity"
+    });
+  }
+
+  return ticket;
+}
+
+////////////////////////////////// Routing //////////////////////////////////
 
 
 app.get("/", (req, res) => {
@@ -271,217 +303,487 @@ app.get("/oauth", async (req, res) => {
   });
 });
 
-// Create a Boat
-app.post('/boats', async (req, res) => {
+/////////////////// Engineering Change Helper Functions ///////////////////
 
-  // // Validate content type
-  // if (req.get('Content-Type') != 'application/json') {
-  //   res.status(415).json({
-  //     "Error": "The request uses a unsupported media type"
-  //   });
-  //   return;
-  // }
+// Attribute valid check for EC. Determines that only valid attributes are used with
+// valid data types.
+function attributeCheckEC(req, res) {
+  var validReq = true;
 
-  // // Validate input
-  // containsValidName = false;
-  // containsValidType = false;
-  // containsValidLength = false;
-  // containsNonvalid = false;
+  // Check for duplicate inputs
+  var typeCount = 0;
+  var dateCount = 0;
+  var historyCount = 0;
+  var planCount = 0;
+  
+  for (prop in req.body) {
+    switch(prop) {
+      case 'type':
+        if ((typeof req.body[prop] != 'string') || typeCount > 0) {
+          validReq = false;
+        }
+        typeCount++;
+        break;
+      case 'date_created':
+        if ((typeof req.body[prop] != 'string') || dateCount > 0) {
+          validReq = false;
+        }
+        dateCount++;
+        break;
+      case 'history':
+        if ((typeof req.body[prop] != 'string') || historyCount > 0) {
+          validReq = false;
+        }
+        historyCount++;
+        break;
+      case 'plan':
+        if ((typeof req.body[prop] != 'string') || planCount > 0) {
+          validReq = false;
+        }
+        planCount++;
+        break;
+      default:
+        validReq = false;
+    }
+  }
 
-  // for (prop in req.body) {
-  //   if (prop == 'name') {
-  //     containsValidName = true;
-  //   } else if (prop == 'type') {
-  //     containsValidType = true;
-  //   } else if (prop == 'length' && typeof req.body[prop] == 'number') {
-  //     containsValidLength = true;
-  //   } else {
-  //     containsNonvalid = true;
-  //   }
-  // }
-
-  //   // Return error if bad input
-  // if (!(containsValidName &&
-  //       containsValidType &&
-  //       containsValidLength)
-  //     ||
-  //     containsNonvalid) {
-  //   res.status(400).json({
-  //     "Error": "The request object is missing at least one of the required attributes, contains not allowed information, or the attribute has the wrong value type"
-  //   });
-  //   return;
-  // }
-
-  // // Check for duplicates
-  // var duplicateResponse = await checkDuplicate(req, 'Boat', 'name', req.body.name);
-
-  // if (duplicateResponse.error != null) {
-  //   res.status(400).json({
-  //     "Error": "Falied to determine if the name was a duplicate"
-  //   });
-  //   return;
-  // } else if (duplicateResponse.duplicate == true) {
-  //   res.status(403).json({
-  //     "Error": "The request uses a already existing name"
-  //   });
-  //   return;
-  // }
-
-  // Check the JWT value
-  var ticket
-  try {
-    ticket = await oauth2Client.verifyIdToken({
-      idToken: req.headers.authorization.substring(7),
-      audience: CLIENT_ID
+  if (validReq) {
+    return true;
+  } else {
+    //Send response status and error message
+    res.status(400).json({
+      "Error": "The request object is missing required attributes, contains not allowed information, or the attribute has the wrong value type"
     });
-  } catch (error) {
-    res.status(401).json({
-      "Error": "Missing or incorrect JWT."
+    return false;
+  }
+}
+
+// Required attribute check for EC.
+function requiredAttributeCheckEC(req, res) {
+  var containsHistory = false;
+  var containsPlan = false;
+
+  for (prop in req.body) {
+    if (prop == 'history') {
+      containsHistory = true;
+    } else if (prop == 'plan') {
+      containsPlan = true;
+    }
+  }
+  
+  if (containsHistory && containsPlan) {
+    return true;
+  } else {
+    //Send response status and error message
+    res.status(400).json({
+      "Error": "The request object is missing required attributes, contains not allowed information, or the attribute has the wrong value type"
     });
+    return false;
+  }
+}
+
+// Default Attribute set for EC.
+function defaultAttributeSetEC(req) {
+
+  // Check for the optional attributes
+  var containsType = false;
+  var containsDate = false;
+
+  for (prop in req.body) {
+    if (prop == 'type') {
+      containsType = true;
+    } else if (prop == 'date') {
+      containsDate = true;
+    }
+  }
+  
+  // Set the default values if missing
+  if (!containsType) {
+    req.body.type = "fast"
+  }
+
+  if (!containsDate) {
+    // Source: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date
+    var [month, date, year] = new Date().toLocaleDateString("en-US").split("/")
+    req.body.date_created = month + "/" + date + "/" + year
+
+  }
+}
+
+
+// Check if the credentials allow access to record
+async function validOwner(req, res, ticket, entryKey) {
+
+  // Get engineering change to check owner
+  const getResponse = await getEntry(req, ecKey, "/engineering_changes/");
+  if (getResponse.error != null) {
+    res.status(getResponse.status).json({
+      "Error": getResponse.error
+    });
+    return false;
+  }
+
+  // Return error if not the owner of the engineering change
+  if (getResponse.entity.owner != ticket.getPayload().sub) {
+    res.status(403).json({
+      "Error": "Credentials do not allow for access to this entity"
+    });
+    return false;
+  }
+
+  return true;
+}
+
+/////////////////// Engineering Change Routing ///////////////////
+
+// Create a Engineering Change
+app.post('/engineering_changes', async (req, res) => {
+  
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
     return;
   }
 
-  //Determine Owner 
-  const owner = ticket.getPayload().sub;
+  // Check if credentials exist
+  var ticket = await credentialsExist(req, res)
+  if (ticket == null) {
+    return;
+  }
+
+  // Validate input for data type and for valid attributes
+  if (!attributeCheckEC(req, res)) {
+    return;
+  }
+
+  // Validate for all required
+  if (!requiredAttributeCheckEC(req, res)) {
+    return;
+  }
+
+  defaultAttributeSetEC(req)
 
   // Prepares the new entity
-  const boatEntity = {
-    key: datastore.key('Boat'),
+  const ecEntity = {
+    key: datastore.key('Engineering-Change'),
     data: {
-      name: req.body.name,
       type: req.body.type,
-      length: req.body.length,
-      public: req.body.public,
-      owner: owner
+      date_created: req.body.date_created,
+      history: req.body.history,
+      plan: req.body.plan,
+      parts_changed: [],
+      owner: ticket.getPayload().sub
     },
   };
 
   // Create entry and respond with values
-  createEntry(req, res, boatEntity, "boat", "/boats/");
+  createEntry(req, res, ecEntity, "engineering change", "/engineering_changes/");
 });
 
 
-// Get a Boat
-app.get('/boats/:boat_id', async (req, res) => {
+// // Get a Boat
+// app.get('/boats/:boat_id', async (req, res) => {
 
-  // Validate content request
-  if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json' && req.get('Accept') != 'text/html') {
-    res.status(406).json({
-      "Error": "The request asks for an unsupported media type"
-    });
+//   // Validate content request
+//   if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json' && req.get('Accept') != 'text/html') {
+//     res.status(406).json({
+//       "Error": "The request asks for an unsupported media type"
+//     });
+//     return;
+//   }
+
+//   // Generate Key
+//   const key = datastore.key(['Boat', Number(req.params.boat_id)]);
+
+//   var response = {
+//     status: null,
+//     content: {}
+//   };
+
+//   // Get entry from Datastore
+//   const entryData = await getEntry(req, key, "/boats/");
+
+//   // Respond with entity data or error message
+//   if (entryData.error != null) {
+//     res.status(entryData.status).json({'Error': entryData.error});
+//   } else {
+//     if (req.get('Accept') == '*/*' || req.get('Accept') == 'application/json') {
+//       res.status(entryData.status).json(entryData.entity);
+//     } else {
+//       // Construct HTML response
+//       htmlRes = '<ul>';
+//       for (attr in entryData.entity) {
+//         htmlRes = htmlRes + '<li>' + attr + ': ' + entryData.entity[attr] + '</li>';
+//       }
+//       htmlRes = htmlRes + '</ul>';
+
+//       res.status(entryData.status).send(htmlRes);
+//     }
+//   }
+// });
+
+
+// // Get all of the users public boats
+// app.get('/owners/:owner_id/boats', async (req, res) => {
+
+//   query = datastore.createQuery("Boat").filter('owner', req.params.owner_id).filter('public', true);
+//   const entryList = await getEntryList(req, query, "/boats/");
+
+//   // Respond with entities list or error message
+//   if (entryList.error == null) {
+//     res.status(entryList.status).json(entryList.entities);
+//   } else {
+//     res.status(entryList.status).json({'Error': entryList.error});
+//   }
+// });
+
+
+// // Get all Allowed Boats
+// app.get('/boats', async (req, res) => {
+
+//   // Check the JWT value
+//   var query
+//   try {
+//     ticket = await oauth2Client.verifyIdToken({
+//       idToken: req.headers.authorization.substring(7),
+//       audience: CLIENT_ID
+//     });
+
+//     query = datastore.createQuery("Boat").filter('owner', ticket.getPayload().sub);
+//   } catch (error) {
+//     query = datastore.createQuery("Boat").filter('public', true);
+//   }
+
+//   const entryList = await getEntryList(req, query, "/boats/");
+
+//   // Respond with entities list or error message
+//   if (entryList.error == null) {
+//     res.status(entryList.status).json(entryList.entities);
+//   } else {
+//     res.status(entryList.status).json({'Error': entryList.error});
+//   }
+// });
+
+
+// // Update a Boat
+// app.put('/boats/:boat_id', async (req, res) => {
+
+//   // Validate content type
+//   if (req.get('Content-Type') != 'application/json') {
+//     res.status(415).json({
+//       "Error": "The request uses a unsupported media type"
+//     });
+//     return;
+//   }
+  
+//   // Validate content request
+//   if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json') {
+//     res.status(406).json({
+//       "Error": "The request asks for an unsupported media type"
+//     });
+//     return;
+//   }
+
+//   // Validate input
+//   containsValidName = false;
+//   containsValidType = false;
+//   containsValidLength = false;
+//   containsNonvalid = false;
+
+//   for (prop in req.body) {
+//     if (prop == 'name') {
+//       containsValidName = true;
+//     } else if (prop == 'type') {
+//       containsValidType = true;
+//     } else if (prop == 'length' && typeof req.body[prop] == 'number') {
+//       containsValidLength = true;
+//     } else {
+//       containsNonvalid = true;
+//     }
+//   }
+
+//   // Return error if bad input
+//   if (!(containsValidName &&
+//         containsValidType &&
+//         containsValidLength)
+//       ||
+//       containsNonvalid) {
+//     res.status(400).json({
+//       "Error": "The request object is missing at least one of the required attributes, contains not allowed information, or the attribute has the wrong value type"
+//     });
+//     return;
+//   }
+
+//   // Check for duplicates
+//   var duplicateResponse = await checkDuplicate(req, 'Boat', 'name', req.body.name);
+
+//   if (duplicateResponse.error != null) {
+//     res.status(400).json({
+//       "Error": "Falied to determine if the name was a duplicate"
+//     });
+//     return;
+//   } else if (duplicateResponse.duplicate == true) {
+//     res.status(403).json({
+//       "Error": "The request uses a already existing name"
+//     });
+//     return;
+//   }
+
+//   // Prepare the updated entity
+//   const boat = {
+//     key: datastore.key(['Boat', Number(req.params.boat_id)]),
+//     data: {
+//       name: req.body.name,
+//       type: req.body.type,
+//       length: req.body.length,
+//     },
+//   }
+
+//   const editResponse = await editEntry(boat, "boat");
+
+//   // Respond with entities list or error message
+//   if (editResponse.error == null) {
+//     // Populate return entity
+//     entity = boat.data
+//     entity.id = req.params.boat_id;
+//     entity.self = req.protocol + "://" + req.get("host") + "/boats/" + req.params.boat_id;
+//     res.status(303).set("Location", entity.self).json(entity);
+//   } else {
+//     res.status(editResponse.status).json({'Error': editResponse.error});
+//   }
+// });
+
+
+// // Edit a Boat
+// app.patch('/boats/:boat_id', async (req, res) => {
+
+//   // Validate content type
+//   if (req.get('Content-Type') != 'application/json') {
+//     res.status(415).json({
+//       "Error": "The request uses a unsupported media type"
+//     });
+//     return;
+//   }
+  
+//   // Validate content request
+//   if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json') {
+//     res.status(406).json({
+//       "Error": "The request asks for an unsupported media type"
+//     });
+//     return;
+//   }
+
+//   // Validate input
+//   containsValidName = false;
+//   containsValidType = false;
+//   containsValidLength = false;
+//   containsNonvalid = false;
+
+//   for (prop in req.body) {
+//     if (prop == 'name') {
+//       containsValidName = true;
+//     } else if (prop == 'type') {
+//       containsValidType = true;
+//     } else if (prop == 'length' && typeof req.body[prop] == 'number') {
+//       containsValidLength = true;
+//     } else {
+//       containsNonvalid = true;
+//     }
+//   }
+
+//   // Return error if bad input
+//   if (!(containsValidName ||
+//         containsValidType ||
+//         containsValidLength)
+//       ||
+//       containsNonvalid) {
+//     res.status(400).json({
+//       "Error": "The request object has no valid attributes, contains not allowed information, or the attribute has the wrong value type"
+//     });
+//     return;
+//   }
+
+//   // Check for duplicates if name changed
+//   if (containsValidName) {
+//     var duplicateResponse = await checkDuplicate(req, 'Boat', 'name', req.body.name);
+
+//     if (duplicateResponse.error != null) {
+//       res.status(400).json({
+//         "Error": "Falied to determine if the name was a duplicate"
+//       });
+//       return;
+//     } else if (duplicateResponse.duplicate == true) {
+//       res.status(403).json({
+//         "Error": "The request uses a already existing name"
+//       });
+//       return;
+//     }
+//   }
+
+//   // Get old from Datastore
+//   const key = datastore.key(['Boat', Number(req.params.boat_id)]);
+//   const oldData = await getEntry(req, key, "/boats/");
+
+//   // Update to new information
+//   if (containsValidName) {
+//     nameVal = req.body.name;
+//   } else {
+//     nameVal = oldData.entity.name;
+//   }
+
+//   if (containsValidType) {
+//     typeVal = req.body.type;
+//   } else {
+//     typeVal = oldData.entity.type;
+//   }
+
+//   if (containsValidLength) {
+//     lengthVal = req.body.length;
+//   } else {
+//     lengthVal = oldData.entity.length;
+//   }
+
+//   // Prepare the updated entity
+//   const boat = {
+//     key: datastore.key(['Boat', Number(req.params.boat_id)]),
+//     data: {
+//       name: nameVal,
+//       type: typeVal,
+//       length: lengthVal,
+//     },
+//   }
+
+//   const editResponse = await editEntry(boat, "boat");
+
+//   // Respond with entities list or error message
+//   if (editResponse.error == null) {
+//     // Populate return entity
+//     entity = boat.data
+//     entity.id = req.params.boat_id;
+//     entity.self = req.protocol + "://" + req.get("host") + "/boats/" + req.params.boat_id;
+//     res.status(editResponse.status).json(entity);
+//   } else {
+//     res.status(editResponse.status).json({'Error': editResponse.error});
+//   }
+// });
+
+
+// Delete a Engineering Change
+app.delete('/engineering_changes/:ec_id', async (req, res) => {
+  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
+  
+  // Check if credentials exist
+  var ticket = await credentialsExist(req, res)
+  if (ticket == null) {
     return;
   }
 
-  // Generate Key
-  const key = datastore.key(['Boat', Number(req.params.boat_id)]);
-
-  var response = {
-    status: null,
-    content: {}
-  };
-
-  // Get entry from Datastore
-  const entryData = await getEntry(req, key, "boat", "/boats/");
-
-  // Respond with entity data or error message
-  if (entryData.error != null) {
-    res.status(entryData.status).json({'Error': entryData.error});
-  } else {
-    if (req.get('Accept') == '*/*' || req.get('Accept') == 'application/json') {
-      res.status(entryData.status).json(entryData.entity);
-    } else {
-      // Construct HTML response
-      htmlRes = '<ul>';
-      for (attr in entryData.entity) {
-        htmlRes = htmlRes + '<li>' + attr + ': ' + entryData.entity[attr] + '</li>';
-      }
-      htmlRes = htmlRes + '</ul>';
-
-      res.status(entryData.status).send(htmlRes);
-    }
-  }
-});
-
-
-// Get all of the users public boats
-app.get('/owners/:owner_id/boats', async (req, res) => {
-
-  query = datastore.createQuery("Boat").filter('owner', req.params.owner_id).filter('public', true);
-  const entryList = await getEntryList(req, query, "/boats/");
-
-  // Respond with entities list or error message
-  if (entryList.error == null) {
-    res.status(entryList.status).json(entryList.entities);
-  } else {
-    res.status(entryList.status).json({'Error': entryList.error});
-  }
-});
-
-
-// Get all Allowed Boats
-app.get('/boats', async (req, res) => {
-
-  // Check the JWT value
-  var query
-  try {
-    ticket = await oauth2Client.verifyIdToken({
-      idToken: req.headers.authorization.substring(7),
-      audience: CLIENT_ID
-    });
-
-    query = datastore.createQuery("Boat").filter('owner', ticket.getPayload().sub);
-  } catch (error) {
-    query = datastore.createQuery("Boat").filter('public', true);
-  }
-
-  const entryList = await getEntryList(req, query, "/boats/");
-
-  // Respond with entities list or error message
-  if (entryList.error == null) {
-    res.status(entryList.status).json(entryList.entities);
-  } else {
-    res.status(entryList.status).json({'Error': entryList.error});
-  }
-});
-
-
-// Delete a Boat
-app.delete('/boats/:boat_id', async (req, res) => {
-
-  // Check the JWT value
-  var ticket
-  try {
-    ticket = await oauth2Client.verifyIdToken({
-      idToken: req.headers.authorization.substring(7),
-      audience: CLIENT_ID
-    });
-  } catch (error) {
-    res.status(401).json({
-      "Error": "Missing or incorrect JWT."
-    });
+  //Determine if this is being accessed by the owner
+  var validOwner = await credentialsExist(req, res, ticket, ecKey)
+  if (!validOwner){
     return;
   }
 
-  const boatKey = datastore.key(['Boat', Number(req.params.boat_id)]);
-  const getResponse = await getEntry(req, boatKey, "boat", "/boats/");
-
-  // Get boat to check owner
-  if (getResponse.error != null) {
-    res.status(403).json({
-      "Error": "No boat of this id"
-    });
-    return;
-  }
-
-  // Return error if not the owner of the boat
-  if (getResponse.entity.owner != ticket.getPayload().sub) {
-    res.status(403).json({
-      "Error": "Not the owner of this boat."
-    });
-    return;
-  }
-
-  const deleteResponse = await deleteEntry(boatKey, "boat");
+  const deleteResponse = await deleteEntry(ecKey, "engineering change");
 
   // Respond with entities list or error message
   if (deleteResponse.error == null) {
@@ -492,219 +794,16 @@ app.delete('/boats/:boat_id', async (req, res) => {
 });
 
 
-// Update a Boat
-app.put('/boats/:boat_id', async (req, res) => {
-
-  // Validate content type
-  if (req.get('Content-Type') != 'application/json') {
-    res.status(415).json({
-      "Error": "The request uses a unsupported media type"
-    });
-    return;
-  }
-  
-  // Validate content request
-  if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json') {
-    res.status(406).json({
-      "Error": "The request asks for an unsupported media type"
-    });
-    return;
-  }
-
-  // Validate input
-  containsValidName = false;
-  containsValidType = false;
-  containsValidLength = false;
-  containsNonvalid = false;
-
-  for (prop in req.body) {
-    if (prop == 'name') {
-      containsValidName = true;
-    } else if (prop == 'type') {
-      containsValidType = true;
-    } else if (prop == 'length' && typeof req.body[prop] == 'number') {
-      containsValidLength = true;
-    } else {
-      containsNonvalid = true;
-    }
-  }
-
-  // Return error if bad input
-  if (!(containsValidName &&
-        containsValidType &&
-        containsValidLength)
-      ||
-      containsNonvalid) {
-    res.status(400).json({
-      "Error": "The request object is missing at least one of the required attributes, contains not allowed information, or the attribute has the wrong value type"
-    });
-    return;
-  }
-
-  // Check for duplicates
-  var duplicateResponse = await checkDuplicate(req, 'Boat', 'name', req.body.name);
-
-  if (duplicateResponse.error != null) {
-    res.status(400).json({
-      "Error": "Falied to determine if the name was a duplicate"
-    });
-    return;
-  } else if (duplicateResponse.duplicate == true) {
-    res.status(403).json({
-      "Error": "The request uses a already existing name"
-    });
-    return;
-  }
-
-  // Prepare the updated entity
-  const boat = {
-    key: datastore.key(['Boat', Number(req.params.boat_id)]),
-    data: {
-      name: req.body.name,
-      type: req.body.type,
-      length: req.body.length,
-    },
-  }
-
-  const editResponse = await editEntry(boat, "boat");
-
-  // Respond with entities list or error message
-  if (editResponse.error == null) {
-    // Populate return entity
-    entity = boat.data
-    entity.id = req.params.boat_id;
-    entity.self = req.protocol + "://" + req.get("host") + "/boats/" + req.params.boat_id;
-    res.status(303).set("Location", entity.self).json(entity);
-  } else {
-    res.status(editResponse.status).json({'Error': editResponse.error});
-  }
-});
+// // Edit the Boat List
+// app.put('/boats', async (req, res) => {
+//   res.status(405).json({'Error': 'The request asks for an unsupported method'});
+// });
 
 
-// Edit a Boat
-app.patch('/boats/:boat_id', async (req, res) => {
-
-  // Validate content type
-  if (req.get('Content-Type') != 'application/json') {
-    res.status(415).json({
-      "Error": "The request uses a unsupported media type"
-    });
-    return;
-  }
-  
-  // Validate content request
-  if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json') {
-    res.status(406).json({
-      "Error": "The request asks for an unsupported media type"
-    });
-    return;
-  }
-
-  // Validate input
-  containsValidName = false;
-  containsValidType = false;
-  containsValidLength = false;
-  containsNonvalid = false;
-
-  for (prop in req.body) {
-    if (prop == 'name') {
-      containsValidName = true;
-    } else if (prop == 'type') {
-      containsValidType = true;
-    } else if (prop == 'length' && typeof req.body[prop] == 'number') {
-      containsValidLength = true;
-    } else {
-      containsNonvalid = true;
-    }
-  }
-
-  // Return error if bad input
-  if (!(containsValidName ||
-        containsValidType ||
-        containsValidLength)
-      ||
-      containsNonvalid) {
-    res.status(400).json({
-      "Error": "The request object has no valid attributes, contains not allowed information, or the attribute has the wrong value type"
-    });
-    return;
-  }
-
-  // Check for duplicates if name changed
-  if (containsValidName) {
-    var duplicateResponse = await checkDuplicate(req, 'Boat', 'name', req.body.name);
-
-    if (duplicateResponse.error != null) {
-      res.status(400).json({
-        "Error": "Falied to determine if the name was a duplicate"
-      });
-      return;
-    } else if (duplicateResponse.duplicate == true) {
-      res.status(403).json({
-        "Error": "The request uses a already existing name"
-      });
-      return;
-    }
-  }
-
-  // Get old from Datastore
-  const key = datastore.key(['Boat', Number(req.params.boat_id)]);
-  const oldData = await getEntry(req, key, "boat", "/boats/");
-
-  // Update to new information
-  if (containsValidName) {
-    nameVal = req.body.name;
-  } else {
-    nameVal = oldData.entity.name;
-  }
-
-  if (containsValidType) {
-    typeVal = req.body.type;
-  } else {
-    typeVal = oldData.entity.type;
-  }
-
-  if (containsValidLength) {
-    lengthVal = req.body.length;
-  } else {
-    lengthVal = oldData.entity.length;
-  }
-
-  // Prepare the updated entity
-  const boat = {
-    key: datastore.key(['Boat', Number(req.params.boat_id)]),
-    data: {
-      name: nameVal,
-      type: typeVal,
-      length: lengthVal,
-    },
-  }
-
-  const editResponse = await editEntry(boat, "boat");
-
-  // Respond with entities list or error message
-  if (editResponse.error == null) {
-    // Populate return entity
-    entity = boat.data
-    entity.id = req.params.boat_id;
-    entity.self = req.protocol + "://" + req.get("host") + "/boats/" + req.params.boat_id;
-    res.status(editResponse.status).json(entity);
-  } else {
-    res.status(editResponse.status).json({'Error': editResponse.error});
-  }
-});
-
-
-// Edit the Boat List
-app.put('/boats', async (req, res) => {
-  res.status(405).json({'Error': 'The request asks for an unsupported method'});
-});
-
-
-// Delete the Boat List
-app.delete('/boats', async (req, res) => {
-  res.status(405).json({'Error': 'The request asks for an unsupported method'});
-});
+// // Delete the Boat List
+// app.delete('/boats', async (req, res) => {
+//   res.status(405).json({'Error': 'The request asks for an unsupported method'});
+// });
 
 // Listen to the App Engine-specified port, or 8080 otherwise
 const PORT = process.env.PORT || 8080;
