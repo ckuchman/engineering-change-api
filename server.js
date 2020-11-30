@@ -141,7 +141,7 @@ function editEntry(updatedEntity) {
 
 
 // Delete the entry in the Datastore and return error results
-function deleteEntry(entryKey, objectName) {
+function deleteEntry(entryKey) {
   var result = {
     'status': null,
     'error': null,
@@ -151,7 +151,7 @@ function deleteEntry(entryKey, objectName) {
     datastore.delete(entryKey, (err, apiResponse) => {
       if (err ||apiResponse.indexUpdates == 0) {
         result.status = 404;
-        result.error = "No " + objectName + " with this " + objectName + "_id exists";
+        result.error = "No entity with this id exists";
       } else {
         result.status = 204;
       }
@@ -706,7 +706,7 @@ app.delete('/engineering_changes/:ec_id', async (req, res) => {
     return;
   }
 
-  const deleteResponse = await deleteEntry(key, "engineering change");
+  const deleteResponse = await deleteEntry(key);
 
   // Respond with entities list or error message
   if (deleteResponse.error == null) {
@@ -716,17 +716,6 @@ app.delete('/engineering_changes/:ec_id', async (req, res) => {
   }
 });
 
-
-// // Edit the Boat List
-// app.put('/boats', async (req, res) => {
-//   res.status(405).json({'Error': 'The request asks for an unsupported method'});
-// });
-
-
-// // Delete the Boat List
-// app.delete('/boats', async (req, res) => {
-//   res.status(405).json({'Error': 'The request asks for an unsupported method'});
-// });
 
 // Listen to the App Engine-specified port, or 8080 otherwise
 const PORT = process.env.PORT || 8080;
