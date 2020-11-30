@@ -412,10 +412,10 @@ function defaultAttributeSetEC(req) {
 
 
 // Check if the credentials allow access to record
-async function validOwner(req, res, ticket, entryKey) {
+async function validOwner(req, res, ticket, key) {
 
   // Get engineering change to check owner
-  const getResponse = await getEntry(req, ecKey, "/engineering_changes/");
+  const getResponse = await getEntry(req, key, "/engineering_changes/");
   if (getResponse.error != null) {
     res.status(getResponse.status).json({
       "Error": getResponse.error
@@ -485,7 +485,7 @@ app.post('/engineering_changes', async (req, res) => {
 app.get('/engineering_changes/:ec_id', async (req, res) => {
 
   // Get entity key
-  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
+  const key = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
 
   // Validate content request
   if (!validJSONAccept(req, res)) {
@@ -499,8 +499,8 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   //Determine if this is being accessed by the owner
-  var validOwner = await credentialsExist(req, res, ticket, ecKey)
-  if (!validOwner){
+  var owner = await validOwner(req, res, ticket, key)
+  if (!owner){
     return;
   }
 
@@ -510,7 +510,7 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
   };
 
   // Get entry from Datastore
-  const entryData = await getEntry(req, ecKey, "/engineering_changes/");
+  const entryData = await getEntry(req, key, "/engineering_changes/");
 
   // Respond with entity data or error message
   if (entryData.error != null) {
@@ -567,7 +567,7 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
 app.put('/engineering_changes/:ec_id', async (req, res) => {
 
   // Get entity key
-  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
+  const key = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
 
   // Validate content request
   if (!validJSONAccept(req, res)) {
@@ -581,8 +581,8 @@ app.put('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   //Determine if this is being accessed by the owner
-  var validOwner = await credentialsExist(req, res, ticket, ecKey)
-  if (!validOwner){
+  var owner = await validOwner(req, res, ticket, key)
+  if (!owner){
     return;
   }
 
@@ -601,7 +601,7 @@ app.put('/engineering_changes/:ec_id', async (req, res) => {
 
   // Prepare the updated entity
   const ecEntity = {
-    key: ecKey,
+    key: key,
     data: {
       type: req.body.type,
       date_created: req.body.date_created,
@@ -627,125 +627,110 @@ app.put('/engineering_changes/:ec_id', async (req, res) => {
 });
 
 
-// // Edit a Boat
-// app.patch('/boats/:boat_id', async (req, res) => {
+// Edit a Engineering Change
+app.patch('/engineering_changes/:ec_id', async (req, res) => {
 
-//   // Validate content type
-//   if (req.get('Content-Type') != 'application/json') {
-//     res.status(415).json({
-//       "Error": "The request uses a unsupported media type"
-//     });
-//     return;
-//   }
-  
-//   // Validate content request
-//   if (req.get('Accept') != '*/*' && req.get('Accept') != 'application/json') {
-//     res.status(406).json({
-//       "Error": "The request asks for an unsupported media type"
-//     });
-//     return;
-//   }
+  // Get entity key
+  const key = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
 
-//   // Validate input
-//   containsValidName = false;
-//   containsValidType = false;
-//   containsValidLength = false;
-//   containsNonvalid = false;
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
 
-//   for (prop in req.body) {
-//     if (prop == 'name') {
-//       containsValidName = true;
-//     } else if (prop == 'type') {
-//       containsValidType = true;
-//     } else if (prop == 'length' && typeof req.body[prop] == 'number') {
-//       containsValidLength = true;
-//     } else {
-//       containsNonvalid = true;
-//     }
-//   }
+  // Check if credentials exist
+  var ticket = await credentialsExist(req, res)
+  if (ticket == null) {
+    return;
+  }
 
-//   // Return error if bad input
-//   if (!(containsValidName ||
-//         containsValidType ||
-//         containsValidLength)
-//       ||
-//       containsNonvalid) {
-//     res.status(400).json({
-//       "Error": "The request object has no valid attributes, contains not allowed information, or the attribute has the wrong value type"
-//     });
-//     return;
-//   }
+  //Determine if this is being accessed by the owner
+  var owner = await validOwner(req, res, ticket, key)
+  if (!owner){
+    return;
+  }
 
-//   // Check for duplicates if name changed
-//   if (containsValidName) {
-//     var duplicateResponse = await checkDuplicate(req, 'Boat', 'name', req.body.name);
+  // Validate input for data type and for valid attributes
+  if (!attributeCheckEC(req, res)) {
+    return;
+  }
 
-//     if (duplicateResponse.error != null) {
-//       res.status(400).json({
-//         "Error": "Falied to determine if the name was a duplicate"
-//       });
-//       return;
-//     } else if (duplicateResponse.duplicate == true) {
-//       res.status(403).json({
-//         "Error": "The request uses a already existing name"
-//       });
-//       return;
-//     }
-//   }
+  // Validate that atleast one attribute is being provided
+  var propCounter = 0
+  for (prop in req.body) {
+    propCounter++;
+  }
 
-//   // Get old from Datastore
-//   const key = datastore.key(['Boat', Number(req.params.boat_id)]);
-//   const oldData = await getEntry(req, key, "/boats/");
+  if (propCounter == 0) {
+    res.status(400).json({
+      "Error": "The request object is missing required attributes, contains not allowed information, or the attribute has the wrong value type"
+    });
+    return;
+  }
 
-//   // Update to new information
-//   if (containsValidName) {
-//     nameVal = req.body.name;
-//   } else {
-//     nameVal = oldData.entity.name;
-//   }
+  // Get old from Datastore
+  const oldData = await getEntry(req, key, "/engineering_changes/");
 
-//   if (containsValidType) {
-//     typeVal = req.body.type;
-//   } else {
-//     typeVal = oldData.entity.type;
-//   }
+  //Determine old or new value
+  var type, date_created, history, plan;
 
-//   if (containsValidLength) {
-//     lengthVal = req.body.length;
-//   } else {
-//     lengthVal = oldData.entity.length;
-//   }
+  if (req.body.type != undefined) {
+    type = req.body.type;
+  } else {
+    type = oldData.entity.type;
+  }
 
-//   // Prepare the updated entity
-//   const boat = {
-//     key: datastore.key(['Boat', Number(req.params.boat_id)]),
-//     data: {
-//       name: nameVal,
-//       type: typeVal,
-//       length: lengthVal,
-//     },
-//   }
+  if (req.body.date_created != undefined) {
+    date_created = req.body.date_created;
+  } else {
+    date_created = oldData.entity.date_created;
+  }
 
-//   const editResponse = await editEntry(boat);
+  if (req.body.history != undefined) {
+    history = req.body.history;
+  } else {
+    history = oldData.entity.history;
+  }
 
-//   // Respond with entities list or error message
-//   if (editResponse.error == null) {
-//     // Populate return entity
-//     entity = boat.data
-//     entity.id = req.params.boat_id;
-//     entity.self = req.protocol + "://" + req.get("host") + "/boats/" + req.params.boat_id;
-//     res.status(editResponse.status).json(entity);
-//   } else {
-//     res.status(editResponse.status).json({'Error': editResponse.error});
-//   }
-// });
+  if (req.body.plan != undefined) {
+    plan = req.body.plan;
+  } else {
+    plan = oldData.entity.plan;
+  }
+
+  // Prepare the updated entity
+  const ecEntity = {
+    key: key,
+    data: {
+      type: type,
+      date_created: date_created,
+      history: history,
+      plan: plan,
+      parts_changed: oldData.entity.parts_changed,
+      owner: oldData.entity.owner,
+    },
+  };
+
+  const editResponse = await editEntry(ecEntity);
+
+  // Respond with entities list or error message
+  if (editResponse.error == null) {
+    // Populate return entity
+    entity = ecEntity.data
+    entity.id = req.params.ec_id;
+    entity.self = req.protocol + "://" + req.get("host") + "/engineering_changes/" + req.params.ec_id;
+    res.status(editResponse.status).json(entity);
+  } else {
+    res.status(editResponse.status).json({'Error': editResponse.error});
+  }
+});
 
 
 // Delete a Engineering Change
 app.delete('/engineering_changes/:ec_id', async (req, res) => {
 
   // Get entity key
-  const ecKey = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
+  const key = datastore.key(['Engineering-Change', Number(req.params.ec_id)]);
   
   // Check if credentials exist
   var ticket = await credentialsExist(req, res)
@@ -754,12 +739,12 @@ app.delete('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   //Determine if this is being accessed by the owner
-  var validOwner = await credentialsExist(req, res, ticket, ecKey)
-  if (!validOwner){
+  var owner = await credentialsExist(req, res, ticket, key)
+  if (!owner){
     return;
   }
 
-  const deleteResponse = await deleteEntry(ecKey, "engineering change");
+  const deleteResponse = await deleteEntry(key, "engineering change");
 
   // Respond with entities list or error message
   if (deleteResponse.error == null) {
