@@ -192,52 +192,7 @@ async function createEntry(req, res, newEntry, objectName, urlPath) {
 }
 
 
-// Gets the entry list with pagination and sends a response back with the entries information.
-async function getEntryListAndRespond(req, res, kind, urlPath, paginationLimit) {
-  const query = datastore.createQuery(kind).limit(paginationLimit);
-
-  if (req.query.cursor) {
-    query.start(req.query.cursor);
-  }
-
-  const entryList = await getEntryList(req, query, urlPath);
-
-  // Respond with entities list or error message
-  if (entryList.error == null) {
-    res.status(entryList.status).json({
-      'entities': entryList.entities,
-      'next': entryList.cursor
-    });
-  } else {
-    res.status(entryList.status).json({'Error': entryList.error});
-  }
-}
-
 /////////////////// General Functions ///////////////////
-
-// Checks if the passed key has the matching attribute
-async function checkDuplicate(req, kind, attr, value) {
-
-  const query = datastore.createQuery(kind).filter(attr, '=', value);
-
-  // Get entry from Datastore
-  const entryList = await getEntryList(req, query, "");
-
-  var response = {
-    error: null,
-    duplicate: null
-  }
-
-  if (entryList.error != null) {
-    response.error = entryList.error;
-  } else if (entryList.entities.length > 0) {
-    response.duplicate = true;
-  } else {
-    response.duplicate = false;
-  }
-
-  return response;
-}
 
 // Validate content request for JSON
 function validJSONAccept(req, res) {
@@ -521,46 +476,53 @@ app.get('/engineering_changes/:ec_id', async (req, res) => {
 });
 
 
-// // Get all of the users public boats
-// app.get('/owners/:owner_id/boats', async (req, res) => {
+// Get all Allowed Engineering Changes
+app.get('/engineering_changes', async (req, res) => {
 
-//   query = datastore.createQuery("Boat").filter('owner', req.params.owner_id).filter('public', true);
-//   const entryList = await getEntryList(req, query, "/boats/");
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
+  
+  // Check if credentials exist
+  var ticket = await credentialsExist(req, res)
+  if (ticket == null) {
+    return;
+  }
 
-//   // Respond with entities list or error message
-//   if (entryList.error == null) {
-//     res.status(entryList.status).json(entryList.entities);
-//   } else {
-//     res.status(entryList.status).json({'Error': entryList.error});
-//   }
-// });
+  // Generate the query tied to the user
+  query = datastore.createQuery("Engineering-Change").filter('owner', ticket.getPayload().sub).limit(5);
+
+  if (req.query.cursor) {
+    query.start(req.query.cursor);
+  }
+
+  const entryList = await getEntryList(req, query, "/engineering_changes/");
+
+  // Determine total count
+  query = datastore.createQuery("Engineering-Change").filter('owner', ticket.getPayload().sub);
+
+  const entryListCount = await getEntryList(req, query, "/engineering_changes/");
 
 
-// // Get all Allowed Boats
-// app.get('/boats', async (req, res) => {
-
-//   // Check the JWT value
-//   var query
-//   try {
-//     ticket = await oauth2Client.verifyIdToken({
-//       idToken: req.headers.authorization.substring(7),
-//       audience: CLIENT_ID
-//     });
-
-//     query = datastore.createQuery("Boat").filter('owner', ticket.getPayload().sub);
-//   } catch (error) {
-//     query = datastore.createQuery("Boat").filter('public', true);
-//   }
-
-//   const entryList = await getEntryList(req, query, "/boats/");
-
-//   // Respond with entities list or error message
-//   if (entryList.error == null) {
-//     res.status(entryList.status).json(entryList.entities);
-//   } else {
-//     res.status(entryList.status).json({'Error': entryList.error});
-//   }
-// });
+  // Respond with entities list or error message
+  if (entryList.error == null) {
+    if (entryList.cursor != null) {
+      res.status(entryList.status).json({
+        'count': entryListCount.entities.length,
+        'entities': entryList.entities,
+        'next': entryList.cursor
+      });
+    } else {
+      res.status(entryList.status).json({
+        'count': entryListCount.entities.length,
+        'entities': entryList.entities
+      });
+    }
+  } else {
+    res.status(entryList.status).json({'Error': entryList.error});
+  }
+});
 
 
 // Update a Engineering Change
