@@ -224,8 +224,8 @@ async function credentialsExist(req, res) {
     });
   } catch (error) {
     //Send response status and error message
-    res.status(403).json({
-      "Error": "Credentials do not allow for access to this entity"
+    res.status(401).json({
+      "Error": "Credentials are missing or not recognized"
     });
   }
 
@@ -766,7 +766,7 @@ app.delete('/engineering_changes/:ec_id', async (req, res) => {
   }
 
   //Determine if this is being accessed by the owner
-  var owner = await credentialsExist(req, res, ticket, key)
+  var owner = await validOwnerEC(req, res, ticket, key)
   if (!owner){
     return;
   }
