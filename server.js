@@ -4,6 +4,7 @@ const bodyParser = require('body-parser')
 const exphbs = require('express-handlebars');
 const {Datastore} = require('@google-cloud/datastore');
 const {google} = require('googleapis');
+const jwt_decode = require('jwt-decode');
 
 const CLIENT_ID = process.env.CLIENT_ID
 const CLIENT_SECRET = process.env.CLIENT_SECRET
@@ -47,7 +48,11 @@ function insertEntry(newEntry, objectName) {
         result.error = "Failed to insert " + objectName;
       } else {
         result.status = 201;
-        result.key = apiResponse.mutationResults[0].key.path[0];
+        if (apiResponse.mutationResults[0].key == null) {
+          result.key = null;
+        } else {
+          result.key = apiResponse.mutationResults[0].key.path[0];
+        }
       }
       resolve(result);
     });
@@ -83,7 +88,7 @@ function getEntry(req, key, urlPath) {
 
 // Get the entry list from the Datastore with a passed in query and returns the entries 
 // data or any errors.
-function getEntryList(req, query, urlPath) {
+function getEntryList(req, query, urlPath, self=true) {
   var result = {
     'status': null,
     'error': null,
@@ -98,11 +103,12 @@ function getEntryList(req, query, urlPath) {
         result.status = 400;
         result.error = "Failed to get entry list";
       } else {
-        
         // Add self and id to all entities
         entities.forEach(function(entity) {
           entity.id = entity[datastore.KEY].id;
-          entity.self = req.protocol + "://" + req.get("host") + urlPath + entity[datastore.KEY].id;
+          if (self) {
+            entity.self = req.protocol + "://" + req.get("host") + urlPath + entity[datastore.KEY].id;
+          }
         });
 
         // Add indicators for pagination
@@ -226,7 +232,7 @@ async function credentialsExist(req, res) {
   return ticket;
 }
 
-////////////////////////////////// Routing //////////////////////////////////
+////////////////////////////////// User and Auth Routing //////////////////////////
 
 
 app.get("/", (req, res) => {
@@ -248,14 +254,78 @@ app.get("/info", (req, res) => {
 
 app.get("/oauth", async (req, res) => {
 
-  //Get token ref:https://github.com/googleapis/google-api-nodejs-client
+  // Get token ref:https://github.com/googleapis/google-api-nodejs-client
   const {tokens} = await oauth2Client.getToken(req.query.code);
   oauth2Client.credentials = tokens;
 
-  res.render('user-info', 
+  // Decode the JWT to get sub value
+  const decodedToken = jwt_decode(tokens.id_token);
+
+  // Shorten the sub to useable length (for datastore to make a id)
+  userID = decodedToken.sub.slice(0,16);
+
+  // Check if user is already stored
+  const key = datastore.key(['User', Number(userID)]);
+  const oldEntity = await getEntry(req, key, "/users/");
+
+  if (oldEntity.error != null) {
+    // Prepares the new entity
+    const userEntity = {
+      key: key,
+      data: {},
+    };
+
+    // Create entity
+    await insertEntry(userEntity, "user");
+  }
+
+  res.render('user-info',
   {
+    username: userID,
     jwt: oauth2Client.credentials.id_token
   });
+});
+
+
+// Get all Users
+app.get('/users', async (req, res) => {
+
+  // Validate content request
+  if (!validJSONAccept(req, res)) {
+    return;
+  }
+  
+  // Generate the query tied to the user
+  query = datastore.createQuery("User").limit(5);
+
+  if (req.query.cursor) {
+    query.start(req.query.cursor);
+  }
+
+  const entryList = await getEntryList(req, query, "/users/", false);
+
+  // Determine total count
+  query = datastore.createQuery("User");
+
+  const entryListCount = await getEntryList(req, query, "/users/", false);
+
+  // Respond with entities list or error message
+  if (entryList.error == null) {
+    if (entryList.cursor != null) {
+      res.status(entryList.status).json({
+        'count': entryListCount.entities.length,
+        'entities': entryList.entities,
+        'next': entryList.cursor
+      });
+    } else {
+      res.status(entryList.status).json({
+        'count': entryListCount.entities.length,
+        'entities': entryList.entities
+      });
+    }
+  } else {
+    res.status(entryList.status).json({'Error': entryList.error});
+  }
 });
 
 /////////////////// Engineering Change Helper Functions ///////////////////
